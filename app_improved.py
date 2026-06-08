@@ -1,5 +1,6 @@
 
 # Ver2 完全版
+import requests
 import streamlit as st
 import pandas as pd
 import folium
@@ -41,9 +42,46 @@ def distance_km(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def geocode_address(address):
+
+    url = "https://nominatim.openstreetmap.org/search"
+
+    params = {
+        "q": address,
+        "format": "json",
+        "limit": 1
+    }
+
+    headers = {
+        "User-Agent": "mental-map-app"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=5
+        )
+
+        data = response.json()
+
+        if len(data) > 0:
+
+            return (
+                float(data[0]["lat"]),
+                float(data[0]["lon"])
+            )
+
+    except:
+        pass
+
+    return None, None
+
 if not Path(CSV_FILE).exists():
     pd.DataFrame(
-        columns=["name","lat","lon","duty","crowd","fun"]
+        columns=["name","category","lat","lon","duty","crowd","fun"]
     ).to_csv(CSV_FILE,index=False)
 
 df = pd.read_csv(CSV_FILE)
@@ -73,32 +111,121 @@ st.info("ホーム地点を基準に心理距離を可視化しています。")
 
 
 with st.sidebar:
+
     st.header("📍地点登録")
 
-    place_name = st.text_input("場所名")
-
-    lat = st.number_input(
-        "緯度",
-        value=float(st.session_state.clicked_lat),
-        format="%.6f"
+    place_name = st.text_input(
+        "場所名（例: 東京駅）"
     )
 
-    lon = st.number_input(
-        "経度",
-        value=float(st.session_state.clicked_lon),
-        format="%.6f"
+    auto_search = st.checkbox(
+        "住所検索を使う",
+        value=True
     )
 
-    duty = st.slider("義務感",1,5,3)
-    crowd = st.slider("混雑度",1,5,3)
-    fun = st.slider("楽しさ",1,5,3)
+    if auto_search and place_name:
 
-    if st.button("地点追加", use_container_width=True):
+        search_lat, search_lon = geocode_address(
+            place_name
+        )
+
+        if search_lat is not None:
+
+            st.success(
+                f"取得成功\n緯度:{search_lat:.6f}\n経度:{search_lon:.6f}"
+            )
+
+            lat = search_lat
+            lon = search_lon
+
+        else:
+
+            st.error(
+                "場所が見つかりません"
+            )
+
+            lat = float(st.session_state.clicked_lat)
+            lon = float(st.session_state.clicked_lon)
+
+    else:
+
+        lat = st.number_input(
+            "緯度",
+            value=float(st.session_state.clicked_lat),
+            format="%.6f"
+        )
+
+        lon = st.number_input(
+            "経度",
+            value=float(st.session_state.clicked_lon),
+            format="%.6f"
+        )
+
+    category = st.selectbox(
+    "カテゴリ",
+    [
+        "自宅",
+        "大学",
+        "職場・バイト",
+        "飲食店",
+        "娯楽",
+        "買い物",
+        "その他"
+    ]
+)
+    duty = st.slider(
+        "義務感",
+        1,5,3
+    )
+
+    crowd = st.slider(
+        "混雑度",
+        1,5,3
+    )
+
+    fun = st.slider(
+        "楽しさ",
+        1,5,3
+    )
+
+    if st.button(
+        "地点追加",
+        use_container_width=True
+    ):
+
         if place_name:
-            new_row = pd.DataFrame([[place_name,lat,lon,duty,crowd,fun]],
-                                  columns=["name","lat","lon","duty","crowd","fun"])
-            df = pd.concat([df,new_row],ignore_index=True)
-            df.to_csv(CSV_FILE,index=False)
+
+            new_row = pd.DataFrame(
+                [[
+                    place_name,
+                    category,
+                    lat,
+                    lon,
+                    duty,
+                    crowd,
+                    fun
+                ]],
+            columns=[
+                    "name",
+                    "category",
+                    "lat",
+                    "lon",
+                    "duty",
+                    "crowd",
+                    "fun"
+            ]
+    )
+
+            df = pd.concat(
+                [df,new_row],
+                ignore_index=True
+            )
+
+            df.to_csv(
+                CSV_FILE,
+                index=False
+            )
+
             st.success("保存しました")
             st.rerun()
 
@@ -109,90 +236,10 @@ if len(df)==0:
     st.warning("地点を登録してください")
     st.stop()
 
-home = st.selectbox("🏠 ホーム地点", df["name"])
-
-home_row = df[df["name"]==home].iloc[0]
-home_lat = home_row["lat"]
-home_lon = home_row["lon"]
-
 df["scale"] = 1 + 0.15*df["duty"] + 0.10*df["crowd"] - 0.10*df["fun"]
-
-psy_lat=[]
-psy_lon=[]
-
-for _,row in df.iterrows():
-    dlat = row["lat"] - home_lat
-    dlon = row["lon"] - home_lon
-
-    psy_lat.append(home_lat + row["scale"]*dlat)
-    psy_lon.append(home_lon + row["scale"]*dlon)
-
-df["psy_lat"]=psy_lat
-df["psy_lon"]=psy_lon
 
 col1,col2 = st.columns(2)
 
-with col1:
-    st.subheader("🌎 現実地図")
-
-    real_map = folium.Map(
-        location=[home_lat,home_lon],
-        zoom_start=12
-    )
-
-    for _,row in df.iterrows():
-        color = "red" if row["name"]==home else "blue"
-
-        folium.Marker(
-            [row["lat"],row["lon"]],
-            popup=row["name"],
-            tooltip=row["name"],
-            icon=folium.Icon(color=color)
-        ).add_to(real_map)
-
-        if row["name"] != home:
-            folium.PolyLine(
-                [[home_lat,home_lon],[row["lat"],row["lon"]]],
-                weight=3
-            ).add_to(real_map)
-
-    map_data = st_folium(real_map,width=700,height=500,key="real_map")
-
-    if map_data and map_data.get("last_clicked"):
-        st.session_state.clicked_lat = map_data["last_clicked"]["lat"]
-        st.session_state.clicked_lon = map_data["last_clicked"]["lng"]
-
-        st.success(
-            f"選択座標: {st.session_state.clicked_lat:.6f}, "
-            f"{st.session_state.clicked_lon:.6f}"
-        )
-
-with col2:
-    st.subheader("🧠 心理地図")
-
-    psy_map = folium.Map(
-        location=[home_lat,home_lon],
-        zoom_start=12
-    )
-
-    for _,row in df.iterrows():
-        color = "red" if row["name"]==home else "green"
-
-        folium.Marker(
-            [row["psy_lat"],row["psy_lon"]],
-            popup=f"{row['name']}<br>倍率:{row['scale']:.2f}",
-            tooltip=row["name"],
-            icon=folium.Icon(color=color)
-        ).add_to(psy_map)
-
-        if row["name"] != home:
-            folium.PolyLine(
-                [[home_lat,home_lon],[row["psy_lat"],row["psy_lon"]]],
-                color="red",
-                weight=3
-            ).add_to(psy_map)
-
-    st_folium(psy_map,width=700,height=500,key="psy_map")
 
 st.subheader("心理倍率")
 st.dataframe(
@@ -201,26 +248,6 @@ st.dataframe(
 )
 
 distance_data=[]
-
-for _,row in df.iterrows():
-    if row["name"]==home:
-        continue
-
-    real_dist = distance_km(
-        home_lat,home_lon,
-        row["lat"],row["lon"]
-    )
-
-    psy_dist = distance_km(
-        home_lat,home_lon,
-        row["psy_lat"],row["psy_lon"]
-    )
-
-    distance_data.append([
-        row["name"],
-        round(real_dist,2),
-        round(psy_dist,2)
-    ])
 
 distance_df = pd.DataFrame(
     distance_data,
@@ -349,42 +376,167 @@ if start_place != goal_place:
         goal_row["lon"]
     )
 
+    # 体感距離計算
+
+    start_scale = start_row["scale"]
+    goal_scale = goal_row["scale"]
+
+    avg_scale = (
+        start_scale + goal_scale
+    ) / 2
+
+    psy_distance = (
+        route_distance * avg_scale
+    )
+
+    map_col1, map_col2 = st.columns(2)
+
+    # ==================================
+    # 現実ルート
+    # ==================================
+
+    with map_col1:
+
+        st.subheader("🌎 現実ルート")
+
+        real_map = folium.Map(
+            location=[
+                (start_row["lat"] + goal_row["lat"]) / 2,
+                (start_row["lon"] + goal_row["lon"]) / 2
+            ],
+            zoom_start=12
+        )
+
+        folium.Marker(
+            [start_row["lat"], start_row["lon"]],
+            popup=f"出発: {start_place}",
+            tooltip=start_place,
+            icon=folium.Icon(color="green")
+        ).add_to(real_map)
+
+        folium.Marker(
+            [goal_row["lat"], goal_row["lon"]],
+            popup=f"目的地: {goal_place}",
+            tooltip=goal_place,
+            icon=folium.Icon(color="red")
+        ).add_to(real_map)
+
+        folium.PolyLine(
+            [
+                [start_row["lat"], start_row["lon"]],
+                [goal_row["lat"], goal_row["lon"]]
+            ],
+            color="blue",
+            weight=5
+        ).add_to(real_map)
+
+        st_folium(
+            real_map,
+            width=600,
+            height=400,
+            key="route_real"
+        )
+
+    # ==================================
+    # 心理ルート
+    # ==================================
+
+    with map_col2:
+
+        st.subheader("🧠 心理ルート")
+
+        start_psy_lat = start_row["lat"]
+        start_psy_lon = start_row["lon"]
+
+        goal_psy_lat = (
+            start_row["lat"]
+            + (goal_row["lat"] - start_row["lat"])
+            * avg_scale
+        )
+
+        goal_psy_lon = (
+            start_row["lon"]
+            + (goal_row["lon"] - start_row["lon"])
+            * avg_scale
+        )
+
+        psy_map = folium.Map(
+            location=[
+                (start_psy_lat + goal_psy_lat) / 2,
+                (start_psy_lon + goal_psy_lon) / 2
+            ],
+            zoom_start=12
+        )
+
+        folium.Marker(
+            [start_psy_lat, start_psy_lon],
+            popup=f"出発: {start_place}",
+            icon=folium.Icon(color="green")
+        ).add_to(psy_map)
+
+        folium.Marker(
+            [goal_psy_lat, goal_psy_lon],
+            popup=f"目的地: {goal_place}",
+            icon=folium.Icon(color="red")
+        ).add_to(psy_map)
+
+        folium.PolyLine(
+            [
+                [start_psy_lat, start_psy_lon],
+                [goal_psy_lat, goal_psy_lon]
+            ],
+            color="red",
+            weight=5
+        ).add_to(psy_map)
+
+        st_folium(
+            psy_map,
+            width=600,
+            height=400,
+            key="route_psy"
+        )
+
+        
+
     walk_minutes = int(
-        (
-            route_distance / 4.8
-        ) * 60
+        (route_distance / 4.8) * 60
     )
 
     arrival_time = (
         datetime.now()
-        + timedelta(
-            minutes=walk_minutes
-        )
+        + timedelta(minutes=walk_minutes)
     )
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-
         st.metric(
-            "距離(km)",
+            "現実距離(km)",
             f"{route_distance:.2f}"
         )
 
     with col2:
+        st.metric(
+            "体感距離(km)",
+            f"{psy_distance:.2f}"
+        )
 
+    with col3:
+        st.metric(
+            "体感倍率",
+            f"{avg_scale:.2f}倍"
+        )
+
+    with col4:
         st.metric(
             "徒歩時間",
             f"{walk_minutes}分"
         )
 
-    with col3:
-
+    with col5:
         st.metric(
             "到着予想",
-            arrival_time.strftime(
-                "%H:%M"
-            )
+            arrival_time.strftime("%H:%M")
         )
 
 # ==================================
